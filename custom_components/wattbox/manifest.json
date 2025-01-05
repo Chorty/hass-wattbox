@@ -2,16 +2,16 @@
   "domain": "wattbox",
   "name": "WattBox",
   "codeowners": [
-    "@eseglem"
+    "@chorty"
   ],
   "dependencies": [
     "network",
     "integration"
   ],
-  "documentation": "https://github.com/eseglem/hass-wattbox",
+  "documentation": "https://github.com/chorty/hass-wattbox",
   "integration_type": "device",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/eseglem/hass-wattbox/issues",
+  "issue_tracker": "https://github.com/chorty/hass-wattbox/issues",
   "loggers": [
     "wattbox",
     "pywattbox",

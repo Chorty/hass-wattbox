@@ -16,7 +16,7 @@ DOMAIN: Final[str] = "wattbox"
 DOMAIN_DATA: Final[str] = f"{DOMAIN}_data"
 VERSION: Final[str] = "0.9.0"
 PLATFORMS: Final[List[str]] = ["binary_sensor", "sensor", "switch"]
-ISSUE_URL: Final[str] = "https://github.com/eseglem/hass-wattbox/issues"
+ISSUE_URL: Final[str] = "https://github.com/chorty/hass-wattbox/issues"
 
 STARTUP: Final[
     str
