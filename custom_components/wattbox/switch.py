@@ -1,110 +1,162 @@
-"""Switch platform for blueprint."""
+"""Switch platform for wattbox."""
+
 import logging
+import re
+from typing import Any, List
 
-from homeassistant.components.switch import DEVICE_CLASS_OUTLET, SwitchEntity
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.const import CONF_NAME
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from pywattbox.base import BaseWattBox, Outlet
 
-from .const import DOMAIN_DATA, PLUG_ICON
+from .const import CONF_NAME_REGEXP, CONF_SKIP_REGEXP, DOMAIN_DATA, PLUG_ICON
 from .entity import WattBoxEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 
+def validate_regex(config: ConfigType, key: str) -> re.Pattern[str] | None:
+    regexp_str: str = config.get(key, "")
+    if regexp_str:
+        try:
+            return re.compile(regexp_str)
+        except re.error:
+            _LOGGER.error("Invalid %s: %s", key, regexp_str)
+    return None
+
+
 async def async_setup_platform(
-    hass, config, async_add_entities, discovery_info=None
-):  # pylint: disable=unused-argument
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType,
+) -> None:
     """Setup switch platform."""
-    name = discovery_info[CONF_NAME]
-    entities = []
+    name: str = discovery_info[CONF_NAME]
 
-    num_switches = hass.data[DOMAIN_DATA][name].number_outlets
+    entities: List[WattBoxEntity] = []
+    wattbox: BaseWattBox = hass.data[DOMAIN_DATA][name]
 
-    entities.append(WattBoxMasterSwitch(hass, name))
-    for i in range(1, num_switches + 1):
-        entities.append(WattBoxBinarySwitch(hass, name, i))
+    name_regexp = validate_regex(config, CONF_NAME_REGEXP)
+    skip_regexp = validate_regex(config, CONF_SKIP_REGEXP)
 
-    async_add_entities(entities, True)
+    skipped_an_outlet = False
+    for i, outlet in wattbox.outlets.items():
+        outlet_name = outlet.name or ""
+
+        # Skip outlets if they match regex
+        if skip_regexp and skip_regexp.search(outlet_name):
+            _LOGGER.debug("Skipping switch #%s - %s", i, outlet_name)
+            skipped_an_outlet = True
+            continue
+
+        if name_regexp:
+            if matched := name_regexp.search(outlet_name):
+                outlet_name = matched.group()
+                try:
+                    outlet_name = matched.group(1)
+                except re.error:
+                    pass
+
+        _LOGGER.debug("Adding switch #%s - %s", i, outlet_name)
+        entities.append(WattBoxBinarySwitch(hass, name, i, outlet_name))
+
+    # Skip the master switch iff any of the outlets are skipped
+    if not skipped_an_outlet:
+        entities.append(WattBoxMasterSwitch(hass, name))
+    else:
+        _LOGGER.debug(
+            "Skipping master switch because an outlet was skipped for %s", name
+        )
+
+    async_add_entities(entities)
 
 
 class WattBoxBinarySwitch(WattBoxEntity, SwitchEntity):
     """WattBox switch class."""
 
-    def __init__(self, hass, name, index):
+    _attr_device_class = SwitchDeviceClass.OUTLET
+    _outlet: Outlet
+
+    def __init__(
+        self, hass: HomeAssistant, name: str, index: int, outlet_name: str = ""
+    ) -> None:
         super().__init__(hass, name, index)
-        self.index = index
-        self._status = False
-        self._name = name + " Outlet " + str(index)
+        # Master Outlet (index == 0) is not in the oulets dict
+        if index:
+            self._outlet = self._wattbox.outlets[index]
+        # Determine outlet name
+        if outlet_name := outlet_name.strip():
+            self._attr_name = f"{name} {outlet_name}"
+        else:
+            self._attr_name = f"{name} Outlet {index}"
+        self._attr_unique_id = f"{self._wattbox.serial_number}-switch-{index}"
 
-    async def async_update(self):
+    async def async_update(self) -> None:
         """Update the sensor."""
-        # Get new data (if any)
-        outlet = self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index]
-
         # Check the data and update the value.
-        self._status = outlet.status
+        self._attr_is_on = self._outlet.status
 
         # Set/update attributes
-        self.attr["name"] = outlet.name
-        self.attr["method"] = outlet.method
-        self.attr["index"] = outlet.index
+        self._attr_extra_state_attributes["name"] = self._outlet.name
+        self._attr_extra_state_attributes["method"] = self._outlet.method
+        self._attr_extra_state_attributes["index"] = self._outlet.index
 
-    async def async_turn_on(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_on(self, **_kwargs: Any) -> None:
         """Turn on the switch."""
+        _LOGGER.debug("Turning On: %s - %s", self._wattbox, self._outlet)
         _LOGGER.debug(
-            "Turning On: %s - %s",
-            self.hass.data[DOMAIN_DATA][self.wattbox_name],
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index],
-        )
-        _LOGGER.debug(
-            "Current Outlet Before: %s - %s",
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index].status,
-            repr(self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index]),
+            "Current Outlet Before: %s - %s", self._outlet.status, repr(self._outlet)
         )
         # Update state first so it is not stale.
-        self._status = True
+        self._attr_is_on = True
         self.async_write_ha_state()
         # Trigger the action on the wattbox.
-        await self.hass.async_add_executor_job(
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index].turn_on
-        )
+        await self._outlet.async_turn_on()
 
-    async def async_turn_off(self, **kwargs):  # pylint: disable=unused-argument
+    async def async_turn_off(self, **_kwargs: Any) -> None:
         """Turn off the switch."""
+        _LOGGER.debug("Turning Off: %s - %s", self._wattbox, self._outlet)
         _LOGGER.debug(
-            "Turning Off: %s - %s",
-            self.hass.data[DOMAIN_DATA][self.wattbox_name],
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index],
-        )
-        _LOGGER.debug(
-            "Current Outlet Before: %s - %s",
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index].status,
-            repr(self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index]),
+            "Current Outlet Before: %s - %s", self._outlet.status, repr(self._outlet)
         )
         # Update state first so it is not stale.
-        self._status = False
+        self._attr_is_on = False
         self.async_write_ha_state()
         # Trigger the action on the wattbox.
-        await self.hass.async_add_executor_job(
-            self.hass.data[DOMAIN_DATA][self.wattbox_name].outlets[self.index].turn_off
-        )
+        await self._outlet.async_turn_off()
 
     @property
-    def icon(self):
+    def icon(self) -> str | None:
         """Return the icon of this switch."""
         return PLUG_ICON
 
-    @property
-    def is_on(self):
-        """Return true if the switch is on."""
-        return self._status
-
-    @property
-    def device_class(self):
-        """Return the class of this device, from component DEVICE_CLASSES."""
-        return DEVICE_CLASS_OUTLET
-
 
 class WattBoxMasterSwitch(WattBoxBinarySwitch):
-    def __init__(self, hass, name):
+    """WattBox master switch class."""
+
+    _outlet: Outlet | None  # type: ignore[assignment]
+
+    def __init__(self, hass: HomeAssistant, name: str) -> None:
         super().__init__(hass, name, 0)
-        self._name = name + " Master Switch"
+        self._outlet = self._wattbox.master_outlet
+        self._attr_name = f"{name} Master Switch"
+        self._attr_unique_id = f"{self._wattbox.serial_number}-switch-master"
+
+    async def async_update(self) -> None:
+        """Update the sensor."""
+        if self._outlet is not None:
+            # Check the data and update the value.
+            self._attr_is_on = self._outlet.status
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on the switch."""
+        if self._outlet is not None:
+            await super().async_turn_on(**kwargs)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off the switch."""
+        if self._outlet is not None:
+            await super().async_turn_on(**kwargs)

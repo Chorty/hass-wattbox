@@ -1,0 +1,46 @@
+{
+  "name": "ludeeus/integration_blueprint",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bullseye",
+  "postCreateCommand": "scripts/setup",
+  "forwardPorts": [
+    8123
+  ],
+  "portsAttributes": {
+    "8123": {
+      "label": "Home Assistant",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.mypy-type-checker",
+        "charliermarsh.ruff",
+        "EditorConfig.EditorConfig",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "files.eol": "\n",
+        "editor.tabSize": 4,
+        "python.analysis.autoSearchPaths": false,
+        "editor.formatOnPaste": false,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "files.trimTrailingWhitespace": true,
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": true
+          }
+        }
+      }
+    }
+  },
+  "remoteUser": "vscode",
+  "features": {}
+}

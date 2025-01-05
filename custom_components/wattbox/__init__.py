@@ -1,14 +1,16 @@
 """
-Component to integrate with WattBox.
+Component to integrate with wattbox.
 
 For more details about this component, please refer to
 https://github.com/eseglem/hass-wattbox/
 """
-from datetime import timedelta
-from functools import partial
 import logging
-import os
+from datetime import datetime
+from functools import partial
+from typing import Final, List
 
+import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.const import (
     CONF_HOST,
     CONF_NAME,
@@ -17,17 +19,18 @@ from homeassistant.const import (
     CONF_RESOURCES,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
-    PERCENTAGE,
-
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import discovery
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
-import voluptuous as vol
+from homeassistant.helpers.typing import ConfigType
+from pywattbox.base import BaseWattBox
 
 from .const import (
     BINARY_SENSOR_TYPES,
+    CONF_NAME_REGEXP,
+    CONF_SKIP_REGEXP,
     DEFAULT_NAME,
     DEFAULT_PASSWORD,
     DEFAULT_PORT,
@@ -36,27 +39,26 @@ from .const import (
     DOMAIN,
     DOMAIN_DATA,
     PLATFORMS,
-    REQUIRED_FILES,
     SENSOR_TYPES,
     STARTUP,
     TOPIC_UPDATE,
 )
 
-REQUIREMENTS = ["pywattbox>=0.3.0"]
+REQUIREMENTS: Final[List[str]] = ["pywattbox>=0.7.2"]
 
 _LOGGER = logging.getLogger(__name__)
 
-MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=1)
-
-ALL_SENSOR_TYPES = list({**BINARY_SENSOR_TYPES, **SENSOR_TYPES}.keys())
+ALL_SENSOR_TYPES: Final[List[str]] = [*BINARY_SENSOR_TYPES.keys(), *SENSOR_TYPES.keys()]
 
 WATTBOX_HOST_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): cv.string,
-        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.string,
+        vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Optional(CONF_USERNAME, default=DEFAULT_USER): cv.string,
         vol.Optional(CONF_PASSWORD, default=DEFAULT_PASSWORD): cv.string,
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+        vol.Optional(CONF_NAME_REGEXP): cv.string,
+        vol.Optional(CONF_SKIP_REGEXP): cv.string,
         vol.Optional(CONF_RESOURCES, default=ALL_SENSOR_TYPES): vol.All(
             cv.ensure_list, [vol.In(ALL_SENSOR_TYPES)]
         ),
@@ -65,25 +67,21 @@ WATTBOX_HOST_SCHEMA = vol.Schema(
 )
 
 CONFIG_SCHEMA = vol.Schema(
-    {DOMAIN: vol.All(cv.ensure_list, [WATTBOX_HOST_SCHEMA]),}, extra=vol.ALLOW_EXTRA,
+    {
+        DOMAIN: vol.All(cv.ensure_list, [WATTBOX_HOST_SCHEMA]),
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up this component."""
-    from pywattbox import WattBox
-
-    # Print startup message
     _LOGGER.info(STARTUP)
 
-    # Check that all required files are present
-    file_check = await check_files(hass)
-    if not file_check:
-        return False
-
-    hass.data[DOMAIN_DATA] = dict()
+    hass.data[DOMAIN_DATA] = {}
 
     for wattbox_host in config[DOMAIN]:
+        _LOGGER.debug(repr(wattbox_host))
         # Create DATA dict
         host = wattbox_host.get(CONF_HOST)
         password = wattbox_host.get(CONF_PASSWORD)
@@ -91,9 +89,24 @@ async def async_setup(hass, config):
         username = wattbox_host.get(CONF_USERNAME)
         name = wattbox_host.get(CONF_NAME)
 
-        hass.data[DOMAIN_DATA][name] = await hass.async_add_executor_job(
-            WattBox, host, port, username, password
-        )
+        wattbox: BaseWattBox
+        if port in (22, 23):
+            _LOGGER.debug("Importing IP Wattbox")
+            from pywattbox.ip_wattbox import async_create_ip_wattbox
+
+            _LOGGER.debug("Creating IP WattBox")
+            wattbox = await async_create_ip_wattbox(
+                host=host, user=username, password=password, port=port
+            )
+        else:
+            _LOGGER.debug("Importing HTTP Wattbox")
+            from pywattbox.http_wattbox import async_create_http_wattbox
+
+            _LOGGER.debug("Creating HTTP WattBox")
+            wattbox = await async_create_http_wattbox(
+                host=host, user=username, password=password, port=port
+            )
+        hass.data[DOMAIN_DATA][name] = wattbox
 
         # Load platforms
         for platform in PLATFORMS:
@@ -104,62 +117,32 @@ async def async_setup(hass, config):
                 )
             )
 
+        # Use the scan interval to trigger updates
         scan_interval = wattbox_host.get(CONF_SCAN_INTERVAL)
         async_track_time_interval(
-            hass, partial(scan_update_data, hass=hass, name=name), scan_interval
+            hass, partial(update_data, hass=hass, name=name), scan_interval
         )
 
     # Extra logging to ensure the right outlets are set up.
-    _LOGGER.debug(", ".join([str(v) for k, v in hass.data[DOMAIN_DATA].items()]))
+    _LOGGER.debug(", ".join([str(v) for _, v in hass.data[DOMAIN_DATA].items()]))
     _LOGGER.debug(repr(hass.data[DOMAIN_DATA]))
     for _, wattbox in hass.data[DOMAIN_DATA].items():
         _LOGGER.debug("%s has %s outlets", wattbox, len(wattbox.outlets))
-        for o in wattbox.outlets:
-            _LOGGER.debug("Outlet: %s - %s", o, repr(o))
+        for outlet in wattbox.outlets:
+            _LOGGER.debug("Outlet: %s - %s", outlet, repr(outlet))
 
     return True
 
 
-# Setup scheduled updates
-async def scan_update_data(_, hass, name):
-    _LOGGER.debug(
-        "Scan Update Data: %s - %s",
-        hass.data[DOMAIN_DATA][name],
-        repr(hass.data[DOMAIN_DATA][name]),
-    )
-    await update_data(hass, name)
-
-
-async def update_data(hass, name):
+async def update_data(_dt: datetime, hass: HomeAssistant, name: str) -> None:
     """Update data."""
+
     # This is where the main logic to update platform data goes.
     try:
-        await hass.async_add_executor_job(hass.data[DOMAIN_DATA][name].update)
-        _LOGGER.debug(
-            "Updated: %s - %s",
-            hass.data[DOMAIN_DATA][name],
-            repr(hass.data[DOMAIN_DATA][name]),
-        )
+        wattbox = hass.data[DOMAIN_DATA][name]
+        await wattbox.async_update()
+        _LOGGER.debug("Updated: %s - %s", wattbox, repr(wattbox))
         # Send update to topic for entities to see
         async_dispatcher_send(hass, TOPIC_UPDATE.format(DOMAIN, name))
-    except Exception as error:  # pylint: disable=broad-except
+    except Exception as error:
         _LOGGER.error("Could not update data - %s", error)
-
-
-async def check_files(hass):
-    """Return bool that indicates if all files are present."""
-    # Verify that the user downloaded all files.
-    base = f"{hass.config.path()}/custom_components/{DOMAIN}"
-    missing = []
-    for file in REQUIRED_FILES:
-        fullpath = f"{base}/{file}"
-        if not os.path.exists(fullpath):
-            missing.append(file)
-
-    if missing:
-        _LOGGER.critical("The following files are missing: %s", str(missing))
-        returnvalue = False
-    else:
-        returnvalue = True
-
-    return returnvalue

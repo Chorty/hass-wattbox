@@ -1,18 +1,25 @@
 """Binary sensor platform for wattbox."""
+
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import CONF_NAME, CONF_RESOURCES
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import BINARY_SENSOR_TYPES, DOMAIN_DATA
+from .const import BINARY_SENSOR_TYPES
 from .entity import WattBoxEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_platform(
-    hass, config, async_add_entities, discovery_info=None
-):  # pylint: disable=unused-argument
+    hass: HomeAssistant,
+    _config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType,
+) -> None:
     """Setup binary_sensor platform."""
     name = discovery_info[CONF_NAME]
     entities = []
@@ -25,36 +32,28 @@ async def async_setup_platform(
 
         entities.append(WattBoxBinarySensor(hass, name, sensor_type))
 
-    async_add_entities(entities, True)
+    async_add_entities(entities)
 
 
 class WattBoxBinarySensor(WattBoxEntity, BinarySensorEntity):
     """WattBox binary_sensor class."""
 
-    def __init__(self, hass, name, sensor_type):
+    _flipped: bool = False
+
+    def __init__(self, hass: HomeAssistant, name: str, sensor_type: str) -> None:
         super().__init__(hass, name, sensor_type)
-        self.type = sensor_type
-        self._status = False
-        self._name = name + " " + BINARY_SENSOR_TYPES[sensor_type]["name"]
-
-    async def async_update(self):
-        """Update the sensor."""
-        # Get domain data
-        wattbox = self.hass.data[DOMAIN_DATA][self.wattbox_name]
-
-        # Check the data and update the value.
-        self._status = getattr(wattbox, self.type)
-
-    @property
-    def device_class(self):
-        """Return the class of this binary_sensor."""
-        return BINARY_SENSOR_TYPES[self.type]["device_class"]
-
-    @property
-    def is_on(self):
-        """Return true if the binary_sensor is on."""
-        return (
-            not self._status
-            if BINARY_SENSOR_TYPES[self.type]["flipped"]
-            else self._status
+        self.sensor_type: str = sensor_type
+        self._flipped = BINARY_SENSOR_TYPES[self.sensor_type]["flipped"]
+        self._attr_name = name + " " + BINARY_SENSOR_TYPES[self.sensor_type]["name"]
+        self._attr_device_class = BINARY_SENSOR_TYPES[self.sensor_type]["device_class"]
+        self._attr_unique_id = (
+            f"{self._wattbox.serial_number}-bsensor-{self.sensor_type}"
         )
+
+    async def async_update(self) -> None:
+        """Update the sensor."""
+        # Check the data and update the value.
+        value: bool | None = getattr(self._wattbox, self.sensor_type, None)
+        if value is not None and self._flipped:
+            value = not value
+        self._attr_is_on = value

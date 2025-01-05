@@ -1,10 +1,5 @@
 {
-    "name": "Wattbox",
-    "domains": [
-        "binary_sensor",
-        "sensor",
-        "switch"
-    ],
-    "iot_class": "Local Polling",
-    "homeassistant": "0.115.0"
+  "name": "Wattbox",
+  "homeassistant": "2023.5.0",
+  "render_readme": true
 }

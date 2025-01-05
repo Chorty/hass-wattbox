@@ -1,15 +1,26 @@
 {
-    "domain": "wattbox",
-    "name": "WattBox",
-    "version": "6.2",
-    "issue_tracker": "https://github.com/eseglem/hass-wattbox/issues",
-    "documentation": "https://github.com/eseglem/hass-wattbox",
-    "dependencies": [],
-    "iot_class": "local_push",
-    "codeowners": [
-        "@eseglem"
-    ],
-    "requirements": [
-        "pywattbox>=0.3.2"
-    ]
+  "domain": "wattbox",
+  "name": "WattBox",
+  "codeowners": [
+    "@eseglem"
+  ],
+  "dependencies": [
+    "network",
+    "integration"
+  ],
+  "documentation": "https://github.com/eseglem/hass-wattbox",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/eseglem/hass-wattbox/issues",
+  "loggers": [
+    "wattbox",
+    "pywattbox",
+    "httpx",
+    "http-core",
+    "scrapli"
+  ],
+  "requirements": [
+    "pywattbox[http,ip]==0.7.2"
+  ],
+  "version": "0.9.0"
 }
